@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Back-office MAPST</title>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root{--bg:#f4f7fb;--card:#fff;--text:#142033;--muted:#5b6b82;--line:#d7e2ef;--blue:#2463eb;--navy:#10233d;--green:#137a52;--red:#b02a37;--shadow:0 16px 32px rgba(16,35,61,.08);--radius:18px}
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+    .app{max-width:1100px;margin:0 auto;padding:24px}
+    .hero{background:linear-gradient(135deg,var(--navy),#183a63 60%,#2e64bf);color:#fff;border-radius:28px;padding:28px;box-shadow:var(--shadow);margin-bottom:20px}
+    .hero h1{margin:0 0 10px;font-size:34px}.hero p{margin:0;color:rgba(255,255,255,.85);line-height:1.6}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
+    .panel h2{margin:0 0 14px}.field{margin-bottom:16px}.field label{display:block;margin-bottom:8px;font-size:13px;font-weight:700;color:#32445e}
+    .input{width:100%;border:1px solid var(--line);background:#fff;border-radius:12px;padding:12px 14px;color:var(--text)}
+    .help{font-size:12px;color:var(--muted);line-height:1.6}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .btn{border:none;border-radius:12px;padding:12px 16px;font-weight:700;cursor:pointer}.btn-primary{background:var(--blue);color:#fff}.btn-secondary{background:#eef3fb;color:#294261}.btn[disabled]{opacity:.5;cursor:not-allowed}
+    .status{margin-top:14px;padding:12px 14px;border-radius:12px;font-size:14px}.ok{background:#dff7ec;color:var(--green)}.err{background:#ffe3e7;color:var(--red)}
+    .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f9fc;border:1px solid var(--line);border-radius:12px;padding:12px;white-space:pre-wrap;word-break:break-word}
+    ul{margin:10px 0 0 18px;padding:0}@media (max-width:900px){.grid{grid-template-columns:1fr}.hero h1{font-size:28px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="hero">
+      <h1>Back-office MAPST</h1>
+      <p>Chargez votre fichier application HTML et votre nouveau CSV. Le back-office convertit la base en JSON, l’intègre dans le code, puis télécharge une nouvelle version de l’application, sans rien changer pour les coordonnateurs.</p>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Fichiers d’entrée</h2>
+        <div class="field">
+          <label for="appFile">Application HTML actuelle</label>
+          <input id="appFile" class="input" type="file" accept=".html,text/html" />
+          <div class="help">Chargez votre application actuelle.</div>
+        </div>
+        <div class="field">
+          <label for="csvFile">Nouvelle base CSV</label>
+          <input id="csvFile" class="input" type="file" accept=".csv,text/csv" />
+          <div class="help">Le CSV est converti automatiquement en JSON intégré dans le code.</div>
+        </div>
+        <div class="field">
+          <label for="outputName">Nom du fichier généré</label>
+          <input id="outputName" class="input" type="text" value="application_expert_MAPS_mise_a_jour.html" />
+        </div>
+        <div class="actions">
+          <button id="previewBtn" class="btn btn-secondary" type="button">Prévisualiser les stats du CSV</button>
+          <button id="buildBtn" class="btn btn-primary" disabled>Générer l’application mise à jour</button>
+        </div>
+        <div id="status"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Fonctionnement</h2>
+        <ul>
+          <li>conserve tout le comportement de l’application existante</li>
+          <li>remplace uniquement la variable <strong>EMBEDDED_DATA</strong></li>
+          <li>reconstruit <strong>allRecords</strong>, <strong>eligible</strong> et <strong>departments</strong></li><li>cherche les coordonnées de ville via l’API officielle geo.api.gouv.fr quand la ville et le code postal sont présents</li>
+          <li>normalise les téléphones</li>
+          <li>reconnaît les colonnes NOM1 / Prénom1 du dernier CSV expert</li>
+          <li>exclut des résultats les experts sans diplôme, comme aujourd’hui</li>
+        </ul>
+        <div class="help" style="margin-top:14px">Tout se fait dans votre navigateur. Aucun envoi de données vers un serveur.</div>
+        <div id="statsBox" class="code" style="margin-top:14px">Aucune analyse pour le moment.</div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const IDF = {
+      "75": {label: "75 · Paris", lat: 48.8566, lng: 2.3522},
+      "77": {label: "77 · Seine-et-Marne", lat: 48.6197, lng: 2.98},
+      "78": {label: "78 · Yvelines", lat: 48.8049, lng: 1.95},
+      "91": {label: "91 · Essonne", lat: 48.53, lng: 2.24},
+      "92": {label: "92 · Hauts-de-Seine", lat: 48.8924, lng: 2.2188},
+      "93": {label: "93 · Seine-Saint-Denis", lat: 48.9102, lng: 2.445},
+      "94": {label: "94 · Val-de-Marne", lat: 48.7931, lng: 2.4745},
+      "95": {label: "95 · Val-d'Oise", lat: 49.05, lng: 2.2}
+    };
+
+    const els = {
+      appFile: document.getElementById('appFile'),
+      csvFile: document.getElementById('csvFile'),
+      outputName: document.getElementById('outputName'),
+      previewBtn: document.getElementById('previewBtn'),
+      buildBtn: document.getElementById('buildBtn'),
+      status: document.getElementById('status'),
+      statsBox: document.getElementById('statsBox')
+    };
+
+    function setStatus(msg, kind='ok'){
+      els.status.innerHTML = `<div class="status ${kind === 'ok' ? 'ok' : 'err'}">${msg}</div>`;
+    }
+
+    function clean(v){
+      if(v === null || v === undefined) return '';
+      const s = String(v).trim();
+      return s.toLowerCase() === 'nan' ? '' : s;
+    }
+
+    function titleCaseFr(txt){
+      txt = clean(txt).toLowerCase();
+      if(!txt) return '';
+      return txt.split(/([ \-'])/).map(p => /^[ \-']$/.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1)).join('');
+    }
+
+    function upperClean(txt){ return clean(txt).toUpperCase(); }
+
+    function normalizePhone(val){
+      let digits = clean(val).replace(/\D/g, '');
+      if(digits.length === 9) digits = '0' + digits;
+      if(digits.length === 11 && digits.startsWith('33')) digits = '0' + digits.slice(2);
+      let display = 'Non renseigné';
+      if(digits){
+        display = (digits.length === 10 && digits.startsWith('0')) ? digits.match(/.{1,2}/g).join(' ') : digits;
+      }
+      return { raw: digits, display };
+    }
+
+    function parseBool(v){
+      return new Set(['1','x','oui','yes','true','vrai','bc 1','bc 2','bc 3 apjs','bc 3 apec','bc 3 apen','multi','multi activités']).has(clean(v).toLowerCase());
+    }
+
+    function getValue(row, names){
+      for(const name of names){
+        if(Object.prototype.hasOwnProperty.call(row, name) && clean(row[name]) !== '') return row[name];
+      }
+      return '';
+    }
+
+
+    async function geocodeCommune(city, postalCode){
+      const ville = clean(city);
+      const cp = clean(postalCode);
+      if(!ville || !cp) return null;
+      const key = `mapst_geo_${cp}_${ville.toLowerCase()}`;
+      try{
+        const cached = localStorage.getItem(key);
+        if(cached) return JSON.parse(cached);
+      }catch(e){}
+      try{
+        const params = new URLSearchParams({
+          codePostal: cp,
+          nom: ville,
+          fields: 'centre,nom',
+          format: 'json',
+          geometry: 'centre',
+          boost: 'population'
+        });
+        const res = await fetch(`https://geo.api.gouv.fr/communes?${params.toString()}`);
+        if(!res.ok) return null;
+        const data = await res.json();
+        const match = Array.isArray(data) ? data.find(item => item && item.centre && Array.isArray(item.centre.coordinates)) : null;
+        if(!match) return null;
+        const point = { lat: match.centre.coordinates[1], lng: match.centre.coordinates[0] };
+        try{ localStorage.setItem(key, JSON.stringify(point)); }catch(e){}
+        return point;
+      }catch(e){
+        return null;
+      }
+    }
+
+    async function buildData(rows){
+      const allRecords = [];
+      const eligible = [];
+      const deptCounts = {};
+
+      rows.forEach((row) => {
+        let cp = clean(getValue(row, ['Code Postal', 'CodePostal', 'CP'])).split('.')[0];
+        if(cp && cp.length === 4) cp = '0' + cp;
+        const deptCode = cp ? cp.slice(0,2) : '';
+        const phone = normalizePhone(getValue(row, ['Tel', 'Téléphone', 'Telephone']));
+        const rec = {
+          _id: allRecords.length + 1,
+          'NOM': upperClean(getValue(row, ['NOM1', 'NOM', 'Nom'])),
+          'Prénom': titleCaseFr(getValue(row, ['Prénom1', 'Prenom1', 'Prénom', 'Prenom'])),
+          'Mail': clean(getValue(row, ['Mail', 'Email', 'E-mail'])),
+          'Tel': phone.display,
+          _phone_raw: phone.raw,
+          'Code Postal': cp,
+          'Ville': titleCaseFr(getValue(row, ['Ville', 'Commune'])),
+          'Diplômes': clean(getValue(row, ['Diplômes', 'Diplome', 'Diplômes sportifs', 'Diplomes'])),
+          'BC 1': parseBool(getValue(row, ['BC 1', 'BC1'])),
+          'BC 2': parseBool(getValue(row, ['BC 2', 'BC2'])),
+          'BC 3 APJS': parseBool(getValue(row, ['BC 3 APJS', 'APJS'])),
+          'BC 3 APEC': parseBool(getValue(row, ['BC 3 APEC', 'APEC'])),
+          'BC 3 APEN': parseBool(getValue(row, ['BC 3 APEN', 'APEN'])),
+          'Commentaire': clean(getValue(row, ['Commentaire', 'Commentaires'])),
+          _departmentCode: deptCode,
+          _departmentLabel: IDF[deptCode]?.label || deptCode,
+          _lat: IDF[deptCode]?.lat ?? null,
+          _lng: IDF[deptCode]?.lng ?? null
+        };
+        allRecords.push(rec);
+        if(rec['Diplômes']){
+          eligible.push(rec);
+          if(deptCode) deptCounts[deptCode] = (deptCounts[deptCode] || 0) + 1;
+        }
+      });
+
+      const departments = Object.entries(deptCounts).sort((a,b) => a[0].localeCompare(b[0], 'fr')).map(([code, count]) => ({
+        code,
+        label: IDF[code]?.label || code,
+        count
+      }));
+
+      const geocodeTargets = new Map();
+      allRecords.forEach(rec => {
+        if(rec['Ville'] && rec['Code Postal']){
+          geocodeTargets.set(`${rec['Code Postal']}|${rec['Ville']}`.toLowerCase(), { city: rec['Ville'], cp: rec['Code Postal'] });
+        }
+      });
+
+      for(const target of geocodeTargets.values()){
+        const point = await geocodeCommune(target.city, target.cp);
+        if(!point) continue;
+        allRecords.forEach(rec => {
+          if(String(rec['Ville'] || '').toLowerCase() === String(target.city).toLowerCase()
+            && String(rec['Code Postal'] || '').toLowerCase() === String(target.cp).toLowerCase()){
+            rec._lat = point.lat;
+            rec._lng = point.lng;
+          }
+        });
+        eligible.forEach(rec => {
+          if(String(rec['Ville'] || '').toLowerCase() === String(target.city).toLowerCase()
+            && String(rec['Code Postal'] || '').toLowerCase() === String(target.cp).toLowerCase()){
+            rec._lat = point.lat;
+            rec._lng = point.lng;
+          }
+        });
+      }
+
+      return { allRecords, eligible, departments };
+    }
+
+    function readFileAsText(file){
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error(`Lecture impossible : ${file.name}`));
+        reader.readAsText(file, 'utf-8');
+      });
+    }
+
+    async function parseCsvFile(file){
+      const text = await readFileAsText(file);
+      return new Promise((resolve, reject) => {
+        Papa.parse(text, {
+          header: true,
+          skipEmptyLines: true,
+          delimiter: '',
+          complete: (results) => {
+            if(results.errors && results.errors.length){
+              reject(new Error(results.errors[0].message || 'Erreur de lecture CSV'));
+              return;
+            }
+            resolve(results.data || []);
+          },
+          error: (err) => reject(err)
+        });
+      });
+    }
+
+    function patchHtml(appHtml, data){
+      const pattern = /const\s+EMBEDDED_DATA\s*=\s*[\s\S]*?;\s*const\s+MAIL_TEXT\s*=/;
+      if(!pattern.test(appHtml)){
+        throw new Error("Le fichier HTML ne contient pas le bloc EMBEDDED_DATA attendu.");
+      }
+      return appHtml.replace(pattern, `const EMBEDDED_DATA = ${JSON.stringify(data)};\nconst MAIL_TEXT =`);
+    }
+
+    function downloadText(filename, text){
+      const blob = new Blob([text], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'application_complete_mapst_mise_a_jour.html';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function previewCsv(){
+      if(!els.csvFile.files[0]) throw new Error("Ajoutez d'abord un CSV.");
+      const rows = await parseCsvFile(els.csvFile.files[0]);
+      const data = await buildData(rows);
+      const total = data.allRecords.length;
+      const withDiploma = data.eligible.length;
+      const withoutDiploma = total - withDiploma;
+      const tri = data.eligible.filter(r => ['BC 3 APJS','BC 3 APEC','BC 3 APEN'].every(k => r[k])).length;
+      els.statsBox.textContent =
+`Lignes CSV lues : ${total}
+Experts éligibles : ${withDiploma}
+Experts sans diplôme : ${withoutDiploma}
+Experts tri-domaines : ${tri}
+Départements recensés : ${data.departments.length}`;
+      return data;
+    }
+
+    function refreshState(){
+      els.buildBtn.disabled = !(els.appFile.files[0] && els.csvFile.files[0]);
+    }
+
+    els.appFile.addEventListener('change', refreshState);
+    els.csvFile.addEventListener('change', refreshState);
+
+    els.previewBtn.addEventListener('click', async () => {
+      try{
+        await previewCsv();
+        setStatus('Analyse du CSV terminée.');
+      }catch(err){
+        setStatus(err.message, 'err');
+      }
+    });
+
+    els.buildBtn.addEventListener('click', async () => {
+      try{
+        els.buildBtn.disabled = true;
+        setStatus('Génération en cours…');
+        const [appHtml, rows] = await Promise.all([
+          readFileAsText(els.appFile.files[0]),
+          parseCsvFile(els.csvFile.files[0])
+        ]);
+        const data = await buildData(rows);
+        const patchedHtml = patchHtml(appHtml, data);
+        downloadText(els.outputName.value.trim() || 'application_complete_mapst_mise_a_jour.html', patchedHtml);
+        els.statsBox.textContent =
+`Lignes CSV lues : ${data.allRecords.length}
+Experts éligibles : ${data.eligible.length}
+Experts sans diplôme : ${data.allRecords.length - data.eligible.length}
+Départements recensés : ${data.departments.length}
+Fichier généré : ${els.outputName.value.trim() || 'application_complete_mapst_mise_a_jour.html'}`;
+        setStatus('Application mise à jour générée avec succès.');
+      }catch(err){
+        console.error(err);
+        setStatus(err.message || 'Erreur pendant la génération.', 'err');
+      }finally{
+        refreshState();
+      }
+    });
+  </script>
+</body>
+</html>
